@@ -1,10 +1,10 @@
 # cyber-lab — Guide
 
-> **Version 0.3.** Four chapters, each end to end and *proven on real VMs*
-> (`qlab test cyber-lab` → 27 checks green): the ban is the proof; close a
+> **Version 0.4.** Five chapters, each end to end and *proven on real VMs*
+> (`qlab test cyber-lab` → 31 checks green): the ban is the proof; close a
 > vulnerable PHP app and prove it closed; the blind filter (a zero that lies);
-> and the Docker/FORWARD trap (a firewall that wasn't). Still planned: mail
-> spoofing + SPF/DKIM/DMARC — a real service, verified the same way.
+> the Docker/FORWARD trap (a firewall that wasn't); and the mail that lies
+> (a spoofed sender rejected by SPF).
 
 ## The one idea
 
@@ -151,9 +151,43 @@ curl http://192.168.100.1:8888 # now blocked
 ufw was "active" the entire time. "Active" was never the question. (This is the
 2026-08-19 VPS lesson, exactly: ufw does not protect ports published by Docker.)
 
+## Chapter 5 — the mail that lies (SPF, with DMARC published)
+
+The defender runs a real Postfix, and a local DNS that serves the records the
+anti-spoofing checks read. The spoofable domain `boss.lab` publishes an SPF
+record that authorises exactly one address — not the attacker — and ends in
+`-all`; its `_dmarc.boss.lab` says `p=reject`. So a mail *claiming* to come from
+`boss.lab` is a checkable claim.
+
+From the attacker, send it — first while the defender is undefended, then after:
+
+```
+# defender — undefended
+sudo mail-spf-off
+# attacker
+spoof-mail ceo@boss.lab victim@mail.lab 192.168.100.1     # accepted (250)
+
+# defender — enforce SPF
+sudo mail-spf-on
+# attacker
+spoof-mail ceo@boss.lab victim@mail.lab 192.168.100.1     # rejected:
+#   550 5.7.23 ... SPF fail - not authorized ... ip=192.168.100.2
+```
+
+Same forged mail, two answers — because the difference was never "is Postfix
+running", it was whether the claim was checked.
+
+**Honest scope.** What is *enforced* here is **SPF** (via `postfix-policyd-spf`):
+the sender's IP is checked against the domain's SPF record, and a `Fail` is
+rejected at SMTP time. The **DMARC** record (`p=reject`) is published and shown,
+but not yet evaluated by a milter (opendmarc) — that alignment layer, plus DKIM
+signing, is the natural next step and would compound the same rejection. The
+chapter teaches the mechanism that DMARC is built on, and says so.
+
 ## Where this goes next
 
-One chapter remains for the plugin: a mail server (send a spoofed sender from the
-attacker, prove SPF/DKIM/DMARC reject it) — a real Postfix on the defender,
-verified the same way: the forged mail accepted while undefended, rejected once
-the checks are on.
+The plugin now covers the five backend chapters. The remaining work is the
+refinement above (DKIM signing + opendmarc for a full DMARC verdict), and the
+browser sibling **EDU-CYBER**, which reproduces the browser-friendly chapters
+(1–4 shapes) with two hosts in one v86 kernel — using these proven invariants as
+its reference.

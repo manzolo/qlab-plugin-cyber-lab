@@ -105,6 +105,9 @@ packages:
   - docker.io
   - python3-systemd
   - php-cli
+  - postfix
+  - postfix-policyd-spf-python
+  - dnsmasq
   - net-tools
   - vim
   - nano
@@ -236,6 +239,41 @@ write_files:
       iptables -D DOCKER-USER -p tcp -m conntrack --ctorigdstport 8888 -j DROP 2>/dev/null || true
       iptables -D DOCKER-USER -p tcp --dport 8888 -j DROP 2>/dev/null || true
       echo "DOCKER-USER rule removed"
+  # --- Mail spoofing vs SPF/DMARC (chapter 5) -------------------------------
+  # A local DNS (dnsmasq on 127.0.0.1) serves the records the SPF/DMARC checks
+  # read. The spoofable domain boss.lab authorises ONE address that is NOT the
+  # attacker, and ends in -all; its _dmarc says p=reject. So a mail claiming to
+  # come from boss.lab, sent from the attacker's IP, fails SPF — and once the
+  # policy is enforced, Postfix rejects it at SMTP time (550).
+  - path: /etc/dnsmasq.d/cyber-lab.conf
+    content: |
+      listen-address=127.0.0.1
+      bind-interfaces
+      # unknown names go out via the SLIRP resolver, so the box still resolves
+      server=10.0.2.3
+      # the spoofable domain: only 10.9.9.9 may send, everyone else -> fail
+      txt-record=boss.lab,"v=spf1 ip4:10.9.9.9 -all"
+      txt-record=_dmarc.boss.lab,"v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s"
+      address=/boss.lab/10.9.9.9
+      # our own domain
+      txt-record=mail.lab,"v=spf1 ip4:192.168.100.1 -all"
+      address=/mail.lab/192.168.100.1
+  - path: /usr/local/bin/mail-spf-on
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Enforce SPF: add the policy service to the recipient restrictions.
+      postconf -e 'smtpd_recipient_restrictions=permit_mynetworks, reject_unauth_destination, check_policy_service unix:private/policyd-spf'
+      systemctl reload postfix
+      echo "SPF enforcement ON (forged senders that fail SPF are now rejected)"
+  - path: /usr/local/bin/mail-spf-off
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Undefended: no SPF policy. A forged sender is accepted.
+      postconf -e 'smtpd_recipient_restrictions=permit_mynetworks, reject_unauth_destination'
+      systemctl reload postfix
+      echo "SPF enforcement OFF (forged senders are accepted — the undefended state)"
   - path: /etc/motd.raw
     content: |
       \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m
@@ -278,6 +316,24 @@ runcmd:
   - systemctl start docker
   - bash -c 'for i in 1 2 3 4 5; do docker pull nginx:alpine && break || sleep 10; done'
   - bash -c 'docker rm -f trap-web 2>/dev/null; docker run -d --restart=always --name trap-web -p 8888:80 nginx:alpine || true'
+  # --- Mail: local DNS, then Postfix + SPF policy service -------------------
+  - systemctl enable dnsmasq
+  - systemctl restart dnsmasq
+  - bash -c 'rm -f /etc/resolv.conf; echo "nameserver 127.0.0.1" > /etc/resolv.conf'
+  - postconf -e 'myhostname=mail.lab'
+  - postconf -e 'mydomain=mail.lab'
+  - postconf -e 'myorigin=$mydomain'
+  - postconf -e 'inet_interfaces=all'
+  - postconf -e 'inet_protocols=ipv4'
+  - postconf -e 'mydestination=$myhostname, mail.lab, localhost.localdomain, localhost'
+  - postconf -e 'mynetworks=127.0.0.0/8'
+  - postconf -e 'policyd-spf_time_limit=3600'
+  - bash -c 'grep -q "^policyd-spf " /etc/postfix/master.cf || printf "policyd-spf unix - n n - 0 spawn\n    user=policyd-spf argv=/usr/bin/policyd-spf\n" >> /etc/postfix/master.cf'
+  - id victim 2>/dev/null || useradd -m -s /usr/sbin/nologin victim
+  # start defended: forged senders should be rejected out of the box
+  - /usr/local/bin/mail-spf-on
+  - systemctl enable postfix
+  - systemctl restart postfix
   - echo "=== cyber-lab-defender VM is ready! ==="
 USERDATA
 
@@ -310,6 +366,7 @@ packages:
   - nmap
   - netcat-openbsd
   - curl
+  - swaks
   - net-tools
   - iputils-ping
   - vim
@@ -351,6 +408,17 @@ write_files:
         echo "  attempt $i sent"
       done
       echo "Done. Now go to the defender and ask: did it get banned?"
+  - path: /usr/local/bin/spoof-mail
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Send a mail with a FORGED sender. Usage: spoof-mail [from] [to] [server]
+      from="${1:-ceo@boss.lab}"
+      to="${2:-victim@mail.lab}"
+      server="${3:-192.168.100.1}"
+      echo "Pretending to be $from ..."
+      swaks --server "$server" --from "$from" --to "$to" --helo attacker.lab \
+            --header "Subject: urgent wire transfer" --body "send the money" 2>&1
   - path: /etc/motd.raw
     content: |
       \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m
@@ -487,6 +555,12 @@ echo "    defender:  sudo ufw allow 22; sudo ufw deny 8888; sudo ufw --force ena
 echo "    attacker:  curl http://192.168.100.1:8888   # STILL reachable (the trap)"
 echo "    defender:  sudo docker-forward-fix          # DROP in DOCKER-USER"
 echo "    attacker:  curl http://192.168.100.1:8888   # now blocked"
+echo ""
+echo "  Mail (Postfix + local DNS) on the defender — the spoofed-sender loop:"
+echo "    defender:  sudo mail-spf-off"
+echo "    attacker:  spoof-mail ceo@boss.lab victim@mail.lab 192.168.100.1  # accepted"
+echo "    defender:  sudo mail-spf-on"
+echo "    attacker:  spoof-mail ceo@boss.lab victim@mail.lab 192.168.100.1  # 550 SPF fail"
 echo ""
 echo "  Or prove it all automatically:  qlab test cyber-lab"
 echo ""

@@ -28,11 +28,16 @@ for _i in $(seq 1 18); do
     ssh_attacker "curl -s -o /dev/null --max-time 4 http://$DEFENDER_IP:8888" >/dev/null 2>&1 && break || true
     sleep 5
 done
+log_info "Waiting for the mail server (:25) to answer..."
+for _i in $(seq 1 12); do
+    ssh_attacker "nc -w4 -z $DEFENDER_IP 25" >/dev/null 2>&1 && break || true
+    sleep 5
+done
 
 TOTAL_PASS=0; TOTAL_FAIL=0; TESTS_RUN=0; TESTS_SKIPPED=0; FAILED_EXERCISES=()
 run_test() { local n="$1"; local f=($TESTS_DIR/test_${n}_*.sh); [[ ! -f "${f[0]}" ]] && return; should_skip "$n" && { log_info "Skipping $n"; TESTS_SKIPPED=$((TESTS_SKIPPED+1)); return; }; local e=0; bash "${f[0]}" || e=$?; TESTS_RUN=$((TESTS_RUN+1)); if [[ "$e" -ne 0 ]]; then TOTAL_FAIL=$((TOTAL_FAIL+1)); FAILED_EXERCISES+=("$n"); else TOTAL_PASS=$((TOTAL_PASS+1)); fi; }
 
-run_test "01"; run_test "02"; run_test "03"; run_test "04"
+run_test "01"; run_test "02"; run_test "03"; run_test "04"; run_test "05"
 
 echo ""; echo "${BOLD}=========================================${RESET}"; echo "${BOLD}  Final Report${RESET}"; echo "${BOLD}=========================================${RESET}"; echo ""
 echo "  Exercises run:     $TESTS_RUN"; echo "  Exercises passed:  $TOTAL_PASS"; echo "  Exercises failed:  $TOTAL_FAIL"; echo "  Exercises skipped: $TESTS_SKIPPED"
