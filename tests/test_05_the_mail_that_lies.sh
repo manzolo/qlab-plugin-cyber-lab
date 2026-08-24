@@ -15,7 +15,7 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "$TESTS_DIR/_c
 FROM=ceo@boss.lab
 TO=victim@mail.lab
 
-echo ""; echo "${BOLD}  Chapter — the mail that lies (SPF/DMARC)${RESET}"; echo ""
+echo ""; echo "${BOLD}  Chapter — the mail that lies (SPF)${RESET}"; echo ""
 
 # Precondition: Postfix answers on the internal LAN.
 assert "the mail server answers on the LAN (:25)" \
@@ -24,8 +24,9 @@ assert "the mail server answers on the LAN (:25)" \
 spf=$(ssh_defender "dig +short TXT boss.lab @127.0.0.1 2>/dev/null || host -t TXT boss.lab 127.0.0.1 2>/dev/null" || true)
 log_info "boss.lab SPF as served: $(echo "$spf" | tr -d '\n')"
 
-# --- Undefended: turn the policy OFF, send the forged mail, expect ACCEPT ---
-ssh_defender "sudo /usr/local/bin/mail-spf-off" >/dev/null 2>&1 || true
+# --- Undefended: BOTH mail defenses off, send the forged mail, expect ACCEPT.
+# (mail-dmarc-off too, so this chapter is independent of chapter 6's state.) ---
+ssh_defender "sudo /usr/local/bin/mail-dmarc-off 2>/dev/null; sudo /usr/local/bin/mail-spf-off" >/dev/null 2>&1 || true
 sleep 2
 out_off=$(ssh_attacker "spoof-mail $FROM $TO $DEFENDER_IP" 2>&1 || true)
 assert_contains "UNDEFENDED: the forged sender is accepted (250)" "$out_off" "(^|[^0-9])250"

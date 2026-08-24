@@ -107,6 +107,9 @@ packages:
   - php-cli
   - postfix
   - postfix-policyd-spf-python
+  - opendkim
+  - opendkim-tools
+  - opendmarc
   - dnsmasq
   - net-tools
   - vim
@@ -274,6 +277,51 @@ write_files:
       postconf -e 'smtpd_recipient_restrictions=permit_mynetworks, reject_unauth_destination'
       systemctl reload postfix
       echo "SPF enforcement OFF (forged senders are accepted — the undefended state)"
+  # --- DMARC (chapter 6): opendkim (verify) + opendmarc (enforce) -----------
+  # opendmarc computes SPF itself (SPFSelfValidate) and reads DKIM results from
+  # opendkim ahead of it in the milter chain, checks alignment against the From:
+  # domain, and with RejectFailures rejects when the domain's _dmarc says
+  # p=reject. inet sockets on localhost avoid the classic unix-socket/group
+  # permission pain between the milters and Postfix.
+  - path: /etc/opendkim.conf
+    content: |
+      Syslog                  yes
+      UMask                   002
+      Mode                    v
+      Socket                  inet:8891@localhost
+      PidFile                 /run/opendkim/opendkim.pid
+      OversignHeaders         From
+      AutoRestart             yes
+      Canonicalization        relaxed/simple
+  - path: /etc/opendmarc.conf
+    content: |
+      AuthservID              mail.lab
+      Syslog                  true
+      Socket                  inet:8893@localhost
+      PidFile                 /run/opendmarc/opendmarc.pid
+      RejectFailures          true
+      SPFSelfValidate         true
+      IgnoreAuthenticatedClients true
+      RequiredHeaders         true
+  - path: /usr/local/bin/mail-dmarc-on
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Enforce DMARC via the milter chain (opendkim then opendmarc).
+      systemctl restart opendkim opendmarc
+      postconf -e 'milter_protocol=6'
+      postconf -e 'milter_default_action=accept'
+      postconf -e 'smtpd_milters=inet:localhost:8891,inet:localhost:8893'
+      postconf -e 'non_smtpd_milters='
+      systemctl reload postfix
+      echo "DMARC enforcement ON (opendkim+opendmarc; p=reject domains are rejected)"
+  - path: /usr/local/bin/mail-dmarc-off
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      postconf -e 'smtpd_milters='
+      systemctl reload postfix
+      echo "DMARC enforcement OFF (no milters)"
   - path: /etc/motd.raw
     content: |
       \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m
@@ -330,8 +378,16 @@ runcmd:
   - postconf -e 'policyd-spf_time_limit=3600'
   - bash -c 'grep -q "^policyd-spf " /etc/postfix/master.cf || printf "policyd-spf unix - n n - 0 spawn\n    user=policyd-spf argv=/usr/bin/policyd-spf\n" >> /etc/postfix/master.cf'
   - id victim 2>/dev/null || useradd -m -s /usr/sbin/nologin victim
-  # start defended: forged senders should be rejected out of the box
+  # DMARC milters: enabled as services, but NOT wired into Postfix at boot, so
+  # chapter 5 (SPF) stays isolated. Chapter 6 wires them in with mail-dmarc-on.
+  - mkdir -p /run/opendkim /run/opendmarc
+  - chown opendkim:opendkim /run/opendkim 2>/dev/null || true
+  - chown opendmarc:opendmarc /run/opendmarc 2>/dev/null || true
+  - systemctl enable opendkim opendmarc || true
+  - systemctl restart opendkim opendmarc || true
+  # start defended on SPF; DMARC milters present but off
   - /usr/local/bin/mail-spf-on
+  - /usr/local/bin/mail-dmarc-off
   - systemctl enable postfix
   - systemctl restart postfix
   - echo "=== cyber-lab-defender VM is ready! ==="
@@ -561,6 +617,10 @@ echo "    defender:  sudo mail-spf-off"
 echo "    attacker:  spoof-mail ceo@boss.lab victim@mail.lab 192.168.100.1  # accepted"
 echo "    defender:  sudo mail-spf-on"
 echo "    attacker:  spoof-mail ceo@boss.lab victim@mail.lab 192.168.100.1  # 550 SPF fail"
+echo ""
+echo "  DMARC (opendkim+opendmarc) — reject on the DMARC verdict, SPF policy off:"
+echo "    defender:  sudo mail-spf-off; sudo mail-dmarc-on"
+echo "    attacker:  spoof-mail ...   # 550 5.7.1 rejected by DMARC policy"
 echo ""
 echo "  Or prove it all automatically:  qlab test cyber-lab"
 echo ""

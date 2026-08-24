@@ -61,14 +61,17 @@ internal socket LAN from `mail-lab`.)
    a port, yet the attacker still reaches it (published-port traffic is FORWARDed,
    not INPUT); the fix is a conntrack DROP in DOCKER-USER.
 5. **The mail that lies** — a spoofed sender: forged `From: boss.lab` accepted
-   while undefended, rejected (550, SPF fail) once SPF is enforced. DMARC record
-   published (p=reject); enforcement here is SPF (opendmarc/DKIM is the next layer).
+   while undefended, rejected (550, SPF fail) once SPF is enforced.
+6. **DMARC says reject** — the same spoof, rejected by a real opendkim+opendmarc
+   verdict (`550 5.7.1 rejected by DMARC policy`) with the SPF policy turned off,
+   so it is DMARC alignment doing the work.
 
 ## Status
 
-**0.4.** Five chapters, each end to end with an automated invariant, all green
-on a real boot (31 checks). Planned next: DKIM signing + opendmarc for a full
-DMARC verdict, and the EDU-CYBER browser sibling.
+**0.5.** Six chapters, each end to end with an automated invariant, all green
+on a real boot (36 checks). SPF *and* DMARC (opendkim+opendmarc) are enforced and
+proven. Planned next: the EDU-CYBER browser sibling, and DKIM signing of
+legitimate outbound mail to complete the send side.
 
 > ⚠️ This is teaching material for an **isolated** lab. Nothing here is meant to
 > be pointed at anything outside its own private LAN.
