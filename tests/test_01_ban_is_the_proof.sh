@@ -13,6 +13,12 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "$TESTS_DIR/_c
 
 echo ""; echo "${BOLD}  Chapter — the ban is the proof${RESET}"; echo ""
 
+# Idempotence: a previous run may have left the attacker banned (bantime is
+# minutes). Clear it so the baseline below is a true clean slate — the same
+# discipline test_02 and test_04 use.
+ssh_defender "sudo fail2ban-client set sshd unbanip $ATTACKER_IP >/dev/null 2>&1; true" >/dev/null 2>&1 || true
+sleep 1
+
 # --- Preconditions: both hosts up, defender sees the attacker on the LAN ---
 assert "defender reachable" ssh_defender "echo ok"
 assert "attacker reachable" ssh_attacker "echo ok"

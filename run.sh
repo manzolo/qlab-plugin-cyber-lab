@@ -101,6 +101,8 @@ package_update: true
 packages:
   - fail2ban
   - iptables
+  - ufw
+  - docker.io
   - python3-systemd
   - php-cli
   - net-tools
@@ -203,6 +205,37 @@ write_files:
       [Definition]
       failregex = sshd\[\d+\]: Failed password for .* from <HOST>
       ignoreregex =
+  # --- The Docker/FORWARD trap (chapter 4) ----------------------------------
+  # Docker publishes a port by writing rules in nat/PREROUTING (DNAT) and the
+  # DOCKER chain of FORWARD. ufw writes rules in INPUT. Traffic to a published
+  # port is DNAT'd and FORWARDED — it never touches INPUT — so 'ufw deny 8888'
+  # blocks nothing. The honest fix lives where the traffic actually is: a DROP
+  # in DOCKER-USER, which iptables evaluates first inside FORWARD.
+  - path: /usr/local/bin/docker-forward-fix
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Close the port ufw could not. Idempotent.
+      #
+      # Subtlety that IS the lesson: the DNAT for a published port happens in
+      # nat/PREROUTING, BEFORE FORWARD. So by the time a packet reaches
+      # DOCKER-USER its destination port is already the container's (80), not
+      # 8888 — a plain "--dport 8888" here matches nothing. We match the
+      # ORIGINAL destination port via conntrack instead.
+      if iptables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport 8888 -j DROP 2>/dev/null; then
+        echo "already fixed: DOCKER-USER already drops original :8888"
+      else
+        iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdstport 8888 -j DROP
+        echo "fixed: DOCKER-USER now drops traffic whose ORIGINAL port was 8888"
+        echo "(on the FORWARD path, where the published-port traffic actually is)"
+      fi
+  - path: /usr/local/bin/docker-forward-unfix
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      iptables -D DOCKER-USER -p tcp -m conntrack --ctorigdstport 8888 -j DROP 2>/dev/null || true
+      iptables -D DOCKER-USER -p tcp --dport 8888 -j DROP 2>/dev/null || true
+      echo "DOCKER-USER rule removed"
   - path: /etc/motd.raw
     content: |
       \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m
@@ -238,6 +271,13 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable cyber-web
   - systemctl start cyber-web
+  # Docker/FORWARD trap: a container publishing :8888. dockerd needs a moment;
+  # the pull goes out over the SLIRP NIC. Retry so a slow mirror does not leave
+  # the chapter without its container.
+  - systemctl enable docker
+  - systemctl start docker
+  - bash -c 'for i in 1 2 3 4 5; do docker pull nginx:alpine && break || sleep 10; done'
+  - bash -c 'docker rm -f trap-web 2>/dev/null; docker run -d --restart=always --name trap-web -p 8888:80 nginx:alpine || true'
   - echo "=== cyber-lab-defender VM is ready! ==="
 USERDATA
 
@@ -441,6 +481,12 @@ echo "  Web app (vulnerable PHP) on the defender: http://192.168.100.1:8080"
 echo "    attacker:  curl 'http://192.168.100.1:8080/?r=exec&cmd=id'   # RCE"
 echo "    defender:  sudo touch /etc/cyber-lab/web-hardened; sudo systemctl restart cyber-web"
 echo "    attacker:  curl 'http://192.168.100.1:8080/?r=exec&cmd=id'   # now refused"
+echo ""
+echo "  Docker/FORWARD trap on the defender: a container publishes :8888"
+echo "    defender:  sudo ufw allow 22; sudo ufw deny 8888; sudo ufw --force enable"
+echo "    attacker:  curl http://192.168.100.1:8888   # STILL reachable (the trap)"
+echo "    defender:  sudo docker-forward-fix          # DROP in DOCKER-USER"
+echo "    attacker:  curl http://192.168.100.1:8888   # now blocked"
 echo ""
 echo "  Or prove it all automatically:  qlab test cyber-lab"
 echo ""

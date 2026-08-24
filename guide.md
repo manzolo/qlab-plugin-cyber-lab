@@ -1,10 +1,10 @@
 # cyber-lab — Guide
 
-> **Version 0.2.** Three chapters, each end to end and *proven on real VMs*
-> (`qlab test cyber-lab` → 22 checks green): the ban is the proof; close a
-> vulnerable PHP app and prove it closed; and the blind filter (a zero that
-> lies). Still planned: mail spoofing + SPF/DKIM/DMARC and the Docker/FORWARD
-> trap — both on real services, both verified the same way.
+> **Version 0.3.** Four chapters, each end to end and *proven on real VMs*
+> (`qlab test cyber-lab` → 27 checks green): the ban is the proof; close a
+> vulnerable PHP app and prove it closed; the blind filter (a zero that lies);
+> and the Docker/FORWARD trap (a firewall that wasn't). Still planned: mail
+> spoofing + SPF/DKIM/DMARC — a real service, verified the same way.
 
 ## The one idea
 
@@ -119,9 +119,41 @@ events were always there; the zero was the filter's fault. (On a real server
 this exact mistake once produced 0 matches on 13,474 lines — it looked calm, it
 was blind.)
 
+## Chapter 4 — the firewall that wasn't (Docker/FORWARD)
+
+The defender runs a container that publishes a port (`:8888`). You raise ufw and
+deny that port. ufw says active, the rule is there. And the attacker still gets
+in:
+
+```
+# defender
+sudo ufw allow 22/tcp; sudo ufw allow 8080/tcp
+sudo ufw deny 8888/tcp; sudo ufw --force enable
+sudo ufw status                                   # active, 8888 DENY
+# attacker
+curl http://192.168.100.1:8888                    # 200 — STILL reachable
+```
+
+Why: a published port is DNAT'd in `nat/PREROUTING` and then **FORWARDED** to the
+container — it never passes through `INPUT`, which is where ufw writes its rules.
+The fix has to live where the traffic actually is, the `DOCKER-USER` chain of
+FORWARD. And a subtlety that is itself the lesson: by the time a packet reaches
+`DOCKER-USER`, the DNAT has already rewritten its destination port to the
+container's (`80`), so you must match the *original* port via conntrack:
+
+```
+# defender
+sudo docker-forward-fix        # iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdstport 8888 -j DROP
+# attacker
+curl http://192.168.100.1:8888 # now blocked
+```
+
+ufw was "active" the entire time. "Active" was never the question. (This is the
+2026-08-19 VPS lesson, exactly: ufw does not protect ports published by Docker.)
+
 ## Where this goes next
 
-The same shape — attack from one VM, measure the invariant on the other — is
-what the remaining chapters need: a mail server (send a spoofed sender, prove
-SPF/DKIM/DMARC reject it) and the Docker/FORWARD trap (firewall "on", port still
-reachable). Both are real services on the defender, verified the same way.
+One chapter remains for the plugin: a mail server (send a spoofed sender from the
+attacker, prove SPF/DKIM/DMARC reject it) — a real Postfix on the defender,
+verified the same way: the forged mail accepted while undefended, rejected once
+the checks are on.

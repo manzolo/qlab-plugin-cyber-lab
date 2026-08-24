@@ -10,7 +10,7 @@ to *prove* a defense works instead of assuming it does.
 
 | VM | Internal IP | Packages | Role |
 |----|-------------|----------|------|
-| `cyber-lab-defender` | `192.168.100.1` | `fail2ban`, `iptables`, `php-cli` + a vulnerable web app | the machine you harden |
+| `cyber-lab-defender` | `192.168.100.1` | `fail2ban`, `iptables`, `ufw`, `docker.io`, `php-cli` + a vulnerable web app | the machine you harden |
 | `cyber-lab-attacker` | `192.168.100.2` | `nmap`, `netcat-openbsd`, `curl` + `burst-ssh` | the machine you attack from |
 
 ## The thesis
@@ -57,12 +57,15 @@ internal socket LAN from `mail-lab`.)
    traversal); exploit it, harden it, then watch the same attacks get refused.
 3. **The zero has two readings** — the blind filter: the same log read by a
    broken filter (0 matches, looks calm) and a correct one (matches everything).
+4. **The firewall that wasn't** — the Docker/FORWARD trap: ufw active and denying
+   a port, yet the attacker still reaches it (published-port traffic is FORWARDed,
+   not INPUT); the fix is a conntrack DROP in DOCKER-USER.
 
 ## Status
 
-**0.2.** Three chapters, each end to end with an automated invariant, all green
-on a real boot. Planned next: mail spoofing vs SPF/DKIM/DMARC, and the
-Docker/FORWARD trap — real services, verified the same way.
+**0.3.** Four chapters, each end to end with an automated invariant, all green
+on a real boot (27 checks). Planned next: mail spoofing vs SPF/DKIM/DMARC — a
+real Postfix, verified the same way.
 
 > ⚠️ This is teaching material for an **isolated** lab. Nothing here is meant to
 > be pointed at anything outside its own private LAN.
