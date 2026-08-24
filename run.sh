@@ -102,6 +102,7 @@ packages:
   - fail2ban
   - iptables
   - python3-systemd
+  - php-cli
   - net-tools
   - vim
   - nano
@@ -133,6 +134,75 @@ write_files:
       [sshd]
       enabled  = true
       backend  = systemd
+  # --- Vulnerable PHP web app (chapters 8-10) -------------------------------
+  # Three classics behind one script, with a hardening switch: create the file
+  # /etc/cyber-lab/web-hardened and restart cyber-web to flip every endpoint
+  # from vulnerable to safe. The lab's loop is: exploit it, harden it, prove
+  # the same exploit now fails.
+  - path: /srv/web/index.php
+    content: |
+      <?php
+      $hardened = file_exists('/etc/cyber-lab/web-hardened');
+      $r = $_GET['r'] ?? 'home';
+      // Every request is logged with a date and the client IP — raw material
+      // for the "blind filter" chapter.
+      $line = date('Y-m-d H:i:s')." request r=".$r." from ".($_SERVER['REMOTE_ADDR'] ?? '?')."\n";
+      @file_put_contents('/var/log/cyber-web/access.log', $line, FILE_APPEND);
+      if ($r === 'exec') {              // Remote Code Execution
+        if ($hardened) { http_response_code(403); echo "refused: input is not executed\n"; }
+        else { system($_GET['cmd'] ?? 'true'); }
+      } elseif ($r === 'echo') {        // Cross-Site Scripting
+        $msg = $_GET['msg'] ?? '';
+        echo "Hello ".($hardened ? htmlspecialchars($msg) : $msg)."\n";
+      } elseif ($r === 'file') {        // Path traversal
+        $name = $_GET['name'] ?? '';
+        if ($hardened) {
+          $pp = realpath('/srv/web/'.basename($name));
+          if ($pp && str_starts_with($pp, '/srv/web/')) { readfile($pp); }
+          else { http_response_code(403); echo "refused: outside web root\n"; }
+        } else { readfile($name); }
+      } else {
+        echo "cyber-lab web — try ?r=echo&msg=, ?r=file&name=, ?r=exec&cmd=\n";
+        echo $hardened ? "state: HARDENED\n" : "state: VULNERABLE\n";
+      }
+  - path: /etc/systemd/system/cyber-web.service
+    content: |
+      [Unit]
+      Description=cyber-lab vulnerable PHP web app
+      After=network-online.target
+      [Service]
+      ExecStartPre=/bin/mkdir -p /var/log/cyber-web
+      ExecStart=/usr/bin/php -S 0.0.0.0:8080 -t /srv/web
+      Restart=always
+      [Install]
+      WantedBy=multi-user.target
+  # --- The blind filter (chapter 7) -----------------------------------------
+  # A sample auth log, plus two filters for the same events. The broken one
+  # includes a date at the start of its regex — but fail2ban strips the date
+  # from each line BEFORE applying failregex, so it matches nothing and looks
+  # calm under attack. The good one drops the date and matches. This is the
+  # 2026-08-19 VPS incident in miniature: 0 of 13,474 lines, because the date
+  # was in the way.
+  - path: /opt/cyber-lab/samples/auth-sample.log
+    content: |
+      2026-08-19 10:00:01 sshd[111]: Failed password for invalid user admin from 192.168.100.2 port 5001 ssh2
+      2026-08-19 10:00:02 sshd[112]: Failed password for invalid user root from 192.168.100.2 port 5002 ssh2
+      2026-08-19 10:00:03 sshd[113]: Failed password for invalid user test from 192.168.100.2 port 5003 ssh2
+      2026-08-19 10:00:04 sshd[114]: Failed password for invalid user oracle from 192.168.100.2 port 5004 ssh2
+      2026-08-19 10:00:05 sshd[115]: Failed password for invalid user git from 192.168.100.2 port 5005 ssh2
+  - path: /etc/fail2ban/filter.d/cyber-blind.conf
+    content: |
+      # BROKEN ON PURPOSE. fail2ban removes the leading date before matching,
+      # so a failregex that starts with a date can never match a single line.
+      [Definition]
+      failregex = ^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d sshd\[\d+\]: Failed password for .* from <HOST>
+      ignoreregex =
+  - path: /etc/fail2ban/filter.d/cyber-good.conf
+    content: |
+      # The same intent, without the date the framework already stripped.
+      [Definition]
+      failregex = sshd\[\d+\]: Failed password for .* from <HOST>
+      ignoreregex =
   - path: /etc/motd.raw
     content: |
       \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m
@@ -164,6 +234,10 @@ runcmd:
   - systemctl restart ssh
   - systemctl enable fail2ban
   - systemctl restart fail2ban
+  - mkdir -p /var/log/cyber-web /etc/cyber-lab
+  - systemctl daemon-reload
+  - systemctl enable cyber-web
+  - systemctl start cyber-web
   - echo "=== cyber-lab-defender VM is ready! ==="
 USERDATA
 
@@ -363,7 +437,12 @@ echo "    2) attacker:  burst-ssh 192.168.100.1 8      # the attack"
 echo "    3) defender:  sudo fail2ban-client status sshd  # the ban"
 echo "    4) attacker:  nc -w3 -z 192.168.100.1 22     # now closed to you"
 echo ""
-echo "  Or prove it automatically:  qlab test cyber-lab"
+echo "  Web app (vulnerable PHP) on the defender: http://192.168.100.1:8080"
+echo "    attacker:  curl 'http://192.168.100.1:8080/?r=exec&cmd=id'   # RCE"
+echo "    defender:  sudo touch /etc/cyber-lab/web-hardened; sudo systemctl restart cyber-web"
+echo "    attacker:  curl 'http://192.168.100.1:8080/?r=exec&cmd=id'   # now refused"
+echo ""
+echo "  Or prove it all automatically:  qlab test cyber-lab"
 echo ""
 echo "  Stop both VMs:  qlab stop $PLUGIN_NAME"
 echo "  Override resources:  QLAB_MEMORY=2048 qlab run ${PLUGIN_NAME}"

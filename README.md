@@ -10,7 +10,7 @@ to *prove* a defense works instead of assuming it does.
 
 | VM | Internal IP | Packages | Role |
 |----|-------------|----------|------|
-| `cyber-lab-defender` | `192.168.100.1` | `fail2ban`, `iptables`, `python3-systemd` | the machine you harden |
+| `cyber-lab-defender` | `192.168.100.1` | `fail2ban`, `iptables`, `php-cli` + a vulnerable web app | the machine you harden |
 | `cyber-lab-attacker` | `192.168.100.2` | `nmap`, `netcat-openbsd`, `curl` + `burst-ssh` | the machine you attack from |
 
 ## The thesis
@@ -49,12 +49,20 @@ segment the source is the attacker's real IP — which is what makes "the ban is
 the proof" a measurable fact. (Skeleton borrowed from `firewall-lab`; the
 internal socket LAN from `mail-lab`.)
 
+## Chapters (all proven on real VMs — `qlab test` → 22 checks green)
+
+1. **The ban is the proof** — a burst of failed logins gets the attacker's real
+   IP banned in the register AND locked out at the packet level.
+2. **Close it, and prove it closed** — a vulnerable PHP app (RCE, XSS, path
+   traversal); exploit it, harden it, then watch the same attacks get refused.
+3. **The zero has two readings** — the blind filter: the same log read by a
+   broken filter (0 matches, looks calm) and a correct one (matches everything).
+
 ## Status
 
-**0.1 — first vertical slice.** One chapter (fail2ban: the ban is the proof),
-built end to end with an automated invariant. Planned next: vulnerable PHP,
-mail spoofing vs SPF/DKIM/DMARC, the Docker/FORWARD trap. This slice carries the
-method the rest reuse.
+**0.2.** Three chapters, each end to end with an automated invariant, all green
+on a real boot. Planned next: mail spoofing vs SPF/DKIM/DMARC, and the
+Docker/FORWARD trap — real services, verified the same way.
 
 > ⚠️ This is teaching material for an **isolated** lab. Nothing here is meant to
 > be pointed at anything outside its own private LAN.

@@ -1,9 +1,10 @@
 # cyber-lab — Guide
 
-> **Version 0.1 — first vertical slice.** One chapter, but end to end and
-> *proven*: the attack, the ban, and the two ways the ban is a fact rather than
-> a hope. More chapters (vulnerable PHP, mail spoofing + SPF/DKIM/DMARC, the
-> Docker/FORWARD trap) are planned — this one carries the method the rest reuse.
+> **Version 0.2.** Three chapters, each end to end and *proven on real VMs*
+> (`qlab test cyber-lab` → 22 checks green): the ban is the proof; close a
+> vulnerable PHP app and prove it closed; and the blind filter (a zero that
+> lies). Still planned: mail spoofing + SPF/DKIM/DMARC and the Docker/FORWARD
+> trap — both on real services, both verified the same way.
 
 ## The one idea
 
@@ -80,9 +81,47 @@ abstract: on a real server, a fail2ban filter once matched **0 of 13,474** log
 lines because it stripped the date before applying its pattern. It looked calm.
 It was blind.)
 
+## Chapter 2 — close it, and prove it closed (vulnerable PHP)
+
+The defender runs a small PHP app on `http://192.168.100.1:8080` with the three
+classic web holes behind one script — and a switch that hardens all of them.
+
+1. **Exploit it.** From the attacker, run a command *on the server*:
+   ```
+   curl 'http://192.168.100.1:8080/?r=exec&cmd=id'      # RCE: prints uid=…
+   curl 'http://192.168.100.1:8080/?r=echo&msg=<script>x</script>'   # XSS
+   curl 'http://192.168.100.1:8080/?r=file&name=/etc/passwd'         # traversal
+   ```
+2. **Close it.** On the defender, flip the app to its hardened path and restart:
+   ```
+   sudo touch /etc/cyber-lab/web-hardened
+   sudo systemctl restart cyber-web
+   ```
+3. **Prove it.** Re-run the *same* attacks from the attacker: the RCE and the
+   traversal now answer `403`, and the XSS payload comes back escaped. "I added
+   a check" was not a defense until the attack that worked stopped working.
+
+## Chapter 3 — the zero has two readings (the blind filter)
+
+A fail2ban counter at zero means either "nobody attacked" or "the filter is
+blind" — and you cannot tell which by looking. On the defender, the same 5-line
+sample log is read by two filters:
+
+```
+sudo fail2ban-regex /opt/cyber-lab/samples/auth-sample.log /etc/fail2ban/filter.d/cyber-blind.conf
+sudo fail2ban-regex /opt/cyber-lab/samples/auth-sample.log /etc/fail2ban/filter.d/cyber-good.conf
+```
+
+The blind filter matches **0**; the good one matches **5** — same log, same
+events. The blind filter's regex starts with a date, but fail2ban strips the
+date from every line *before* applying `failregex`, so it can never match. The
+events were always there; the zero was the filter's fault. (On a real server
+this exact mistake once produced 0 matches on 13,474 lines — it looked calm, it
+was blind.)
+
 ## Where this goes next
 
-The same shape — attack from one VM, measure the invariant on the other —
-carries the planned chapters: vulnerable PHP (exploit it, close it, prove the
-exploit now fails), a mail server (send a spoofed sender, prove SPF/DKIM/DMARC
-reject it), and the Docker/FORWARD trap (firewall "on", port still reachable).
+The same shape — attack from one VM, measure the invariant on the other — is
+what the remaining chapters need: a mail server (send a spoofed sender, prove
+SPF/DKIM/DMARC reject it) and the Docker/FORWARD trap (firewall "on", port still
+reachable). Both are real services on the defender, verified the same way.
