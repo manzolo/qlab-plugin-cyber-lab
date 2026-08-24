@@ -1,10 +1,10 @@
 # cyber-lab — Guide
 
-> **Version 0.6.** Seven chapters, each end to end and *proven on real VMs*
-> (`qlab test cyber-lab` → 42 checks green): the ban is the proof; close a
+> **Version 0.7.** Eight chapters, each end to end and *proven on real VMs*
+> (`qlab test cyber-lab` → 46 checks green): the ban is the proof; close a
 > vulnerable PHP app; the blind filter; the Docker/FORWARD trap; the mail that
-> lies (SPF); DMARC says reject; and the service that obeys (a vulnerable
-> raw-TCP protocol, ported from the old cybersecurity-lab).
+> lies (SPF); DMARC says reject; the service that obeys (raw TCP); and the mail
+> that proves itself (DKIM signing — the send side).
 
 ## The one idea
 
@@ -237,9 +237,31 @@ printf 'exec id\nquit\n' | nc 192.168.100.1 9000            # refused
 The point beyond the exploit: a filter or WAF tuned to HTTP would never see this
 traffic at all. The protocol is the attacker's, not the web's.
 
+## Chapter 8 — the mail that proves itself (DKIM signing)
+
+The send side, and the last leg of the mail story. Chapters 5–6 rejected a spoof
+because the claim to be `boss.lab` was checkable and false. This one is the
+mirror: our own `mail.lab` **signs** what it sends, so a receiver can check the
+claim to be us and find it *true*. The defender generates a DKIM key, publishes
+the public half at `mail._domainkey.mail.lab`, and opendkim signs outbound mail:
+
+```
+# defender — send a real message through Postfix from a mail.lab sender
+swaks --server 127.0.0.1 --from postmaster@mail.lab --to victim@mail.lab
+# the delivered message now carries:
+#   DKIM-Signature: v=1; a=rsa-sha256; d=mail.lab; s=mail; ...
+# and it verifies against the published key:
+sudo sed '1{/^From /d}' /var/mail/victim | dkimverify      # signature ok
+```
+
+Two facts made this work, both found on a real boot: opendkim must run as its own
+user (a key dir owned by `opendkim` is refused when it runs as root), and its
+`InternalHosts` must be a file that lists `localhost` explicitly — with an inline
+list it treated `localhost` as external and signed nothing.
+
 ## Where this goes next
 
-The plugin covers seven backend chapters. What remains is the browser sibling
-**EDU-CYBER** (browser-friendly chapters with two hosts in one v86 kernel, using
-these proven invariants as reference) and, if wanted, DKIM *signing* of
-legitimate outbound mail to complete the send-side of the mail story.
+The plugin covers its eight backend chapters — the whole SPF/DKIM/DMARC story
+now closed, both receive and send sides. What remains is the browser sibling
+**EDU-CYBER** (browser-friendly chapters, two hosts in one v86 kernel, using
+these proven invariants as reference).

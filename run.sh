@@ -110,6 +110,8 @@ packages:
   - opendkim
   - opendkim-tools
   - opendmarc
+  - python3-dkim
+  - swaks
   - dnsmasq
   - net-tools
   - vim
@@ -363,12 +365,25 @@ write_files:
     content: |
       Syslog                  yes
       UMask                   002
-      Mode                    v
+      # sv = sign outbound AND verify inbound. Signing is chapter 8 (the send
+      # side); verifying feeds DMARC in chapter 6.
+      Mode                    sv
       Socket                  inet:8891@localhost
       PidFile                 /run/opendkim/opendkim.pid
       OversignHeaders         From
       AutoRestart             yes
       Canonicalization        relaxed/simple
+      # single-domain signing: our own mail.lab, selector "mail"
+      Domain                  mail.lab
+      Selector                mail
+      KeyFile                 /etc/dkimkeys/mail.private
+      # run as the opendkim user so the key dir (owned by opendkim, 0700) is
+      # considered secure; as root it refuses a non-root-owned key dir.
+      UserID                  opendkim
+      # only mail that originates from us gets signed. This MUST be a file that
+      # lists localhost explicitly — an inline list left opendkim treating
+      # "localhost" as external, and it signed nothing (found on a real boot).
+      InternalHosts           refile:/etc/opendkim/TrustedHosts
   - path: /etc/opendmarc.conf
     content: |
       AuthservID              mail.lab
@@ -379,6 +394,13 @@ write_files:
       SPFSelfValidate         true
       IgnoreAuthenticatedClients true
       RequiredHeaders         true
+  - path: /etc/opendkim/TrustedHosts
+    content: |
+      127.0.0.1
+      ::1
+      localhost
+      mail.lab
+      192.168.100.0/24
   - path: /usr/local/bin/mail-dmarc-on
     permissions: '0755'
     content: |
@@ -463,6 +485,18 @@ runcmd:
   - mkdir -p /run/opendkim /run/opendmarc
   - chown opendkim:opendkim /run/opendkim 2>/dev/null || true
   - chown opendmarc:opendmarc /run/opendmarc 2>/dev/null || true
+  # DKIM signing key for mail.lab (chapter 8). 1024-bit so the public key fits a
+  # single DNS TXT string. Generate it, then publish the public half in dnsmasq
+  # at mail._domainkey.mail.lab — the record a verifier reads to check a signature.
+  - mkdir -p /etc/dkimkeys /etc/opendkim
+  - bash -c 'test -f /etc/dkimkeys/mail.private || opendkim-genkey -b 1024 -d mail.lab -s mail -D /etc/dkimkeys'
+  - chown -R opendkim:opendkim /etc/dkimkeys /etc/opendkim
+  - chmod 0700 /etc/dkimkeys
+  - chmod 600 /etc/dkimkeys/mail.private
+  - bash -c 'P=$(grep -o "p=[A-Za-z0-9+/=]*" /etc/dkimkeys/mail.txt | head -1); echo "txt-record=mail._domainkey.mail.lab,\"v=DKIM1; k=rsa; ${P}\"" > /etc/dnsmasq.d/dkim.conf'
+  - systemctl restart dnsmasq
+  # our own hostname resolvable, so sudo/postfix don't wait on a doomed DNS lookup
+  - bash -c 'grep -q cyber-lab-defender /etc/hosts || echo "127.0.1.1 cyber-lab-defender" >> /etc/hosts'
   - systemctl enable opendkim opendmarc || true
   - systemctl restart opendkim opendmarc || true
   # start defended on SPF; DMARC milters present but off

@@ -28,7 +28,10 @@ if [[ -z "$DEFENDER_PORT" || -z "$ATTACKER_PORT" ]]; then echo "ERROR: Cannot fi
 DEFENDER_IP="192.168.100.1"
 ATTACKER_IP="192.168.100.2"
 
-_ssh_base_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+# IdentitiesOnly=yes + IdentityAgent=none: use ONLY the workspace key. Without
+# this, a populated ssh-agent offers its keys first and can trip the VM's
+# MaxAuthTries ("Too many authentication failures") before our key is tried.
+_ssh_base_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -o IdentityAgent=none)
 ssh_defender() { ssh "${_ssh_base_opts[@]}" -i "$SSH_KEY" -p "$DEFENDER_PORT" labuser@localhost "$@"; }
 ssh_attacker() { ssh "${_ssh_base_opts[@]}" -i "$SSH_KEY" -p "$ATTACKER_PORT" labuser@localhost "$@"; }
 
