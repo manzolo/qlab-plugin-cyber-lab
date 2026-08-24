@@ -65,13 +65,17 @@ internal socket LAN from `mail-lab`.)
 6. **DMARC says reject** — the same spoof, rejected by a real opendkim+opendmarc
    verdict (`550 5.7.1 rejected by DMARC policy`) with the SPF policy turned off,
    so it is DMARC alignment doing the work.
+7. **The service that obeys** — a vulnerable raw-TCP protocol on :9000 (`exec`,
+   `file`) ported from the old cybersecurity-lab; exploit it, harden it, prove the
+   same commands are refused. Not HTTP — an HTTP-tuned filter never sees it.
 
 ## Status
 
-**0.5.** Six chapters, each end to end with an automated invariant, all green
-on a real boot (36 checks). SPF *and* DMARC (opendkim+opendmarc) are enforced and
-proven. Planned next: the EDU-CYBER browser sibling, and DKIM signing of
-legitimate outbound mail to complete the send side.
+**0.6.** Seven chapters, each end to end with an automated invariant, all green
+on a real boot (42 checks). Planned next: the EDU-CYBER browser sibling, and DKIM
+signing of legitimate outbound mail. The old
+[cybersecurity-lab](https://github.com/manzolo/cybersecurity-lab) was folded into
+this one (chapters 2 and 7) and archived.
 
 > ⚠️ This is teaching material for an **isolated** lab. Nothing here is meant to
 > be pointed at anything outside its own private LAN.

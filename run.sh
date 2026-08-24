@@ -184,6 +184,82 @@ write_files:
       Restart=always
       [Install]
       WantedBy=multi-user.target
+  # --- Vulnerable raw-TCP service (chapter 7) -------------------------------
+  # Ported from the old cybersecurity-lab (github.com/manzolo/cybersecurity-lab):
+  # a hand-rolled TCP protocol on :9000 with the same two holes it taught —
+  # `exec <cmd>` (command injection / RCE) and `file <path>` (directory
+  # traversal) — but with the defensive switch this collection is built around:
+  # create /etc/cyber-lab/tcp-hardened and both become refusals. It's the web
+  # chapter's lesson in a protocol that is NOT HTTP, so a firewall/WAF tuned to
+  # HTTP would never see it.
+  - path: /srv/tcp/server.py
+    content: |
+      #!/usr/bin/env python3
+      import socket, subprocess, os, os.path, threading
+      HARDENED = lambda: os.path.exists('/etc/cyber-lab/tcp-hardened')
+      def process(line):
+          low = line.lower()
+          if low == 'info': return "lab TCP service v1\n> "
+          if low == 'quit': return "bye\n"
+          if low.startswith('exec '):
+              cmd = line[5:]
+              if HARDENED(): return "refused: this service does not execute input\n> "
+              try:
+                  out = subprocess.check_output(cmd, shell=True, text=True, stderr=subprocess.STDOUT)
+                  return "output:\n" + out + "\n> "
+              except subprocess.CalledProcessError as e:
+                  return "failed (%d):\n%s\n> " % (e.returncode, e.output)
+              except Exception as e:
+                  return "error: %s\n> " % e
+          if low.startswith('file '):
+              path = line[5:]
+              if HARDENED():
+                  base = '/srv/tcp/data/'
+                  rp = os.path.realpath(base + os.path.basename(path))
+                  if rp.startswith(base):
+                      try: return "content:\n" + open(rp).read() + "\n> "
+                      except Exception as e: return "error: %s\n> " % e
+                  return "refused: outside data dir\n> "
+              try: return "content:\n" + open(path).read() + "\n> "
+              except Exception as e: return "error: %s\n> " % e
+          return "unknown command (info | exec <cmd> | file <path> | quit)\n> "
+      def handle(conn):
+          try:
+              conn.sendall(b"Welcome. Commands: info | exec <cmd> | file <path> | quit\n> ")
+              buf = ""
+              while True:
+                  data = conn.recv(1024)
+                  if not data: break
+                  buf += data.decode('utf-8', 'replace')
+                  while "\n" in buf:
+                      line, buf = buf.split("\n", 1)
+                      line = line.strip()
+                      if not line: continue
+                      conn.sendall(process(line).encode())
+                      if line.lower() == 'quit': return
+          except Exception:
+              pass
+          finally:
+              conn.close()
+      def main():
+          s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          s.bind(("0.0.0.0", 9000)); s.listen(10)
+          while True:
+              c, _ = s.accept()
+              threading.Thread(target=handle, args=(c,), daemon=True).start()
+      main()
+  - path: /etc/systemd/system/cyber-tcp.service
+    content: |
+      [Unit]
+      Description=cyber-lab vulnerable raw-TCP service (:9000)
+      After=network-online.target
+      [Service]
+      ExecStartPre=/bin/mkdir -p /srv/tcp/data
+      ExecStart=/usr/bin/python3 /srv/tcp/server.py
+      Restart=always
+      [Install]
+      WantedBy=multi-user.target
   # --- The blind filter (chapter 7) -----------------------------------------
   # A sample auth log, plus two filters for the same events. The broken one
   # includes a date at the start of its regex — but fail2ban strips the date
@@ -357,6 +433,10 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable cyber-web
   - systemctl start cyber-web
+  - mkdir -p /srv/tcp/data
+  - bash -c 'echo "public data, safe to read" > /srv/tcp/data/motd.txt'
+  - systemctl enable cyber-tcp
+  - systemctl start cyber-tcp
   # Docker/FORWARD trap: a container publishing :8888. dockerd needs a moment;
   # the pull goes out over the SLIRP NIC. Retry so a slow mirror does not leave
   # the chapter without its container.
@@ -621,6 +701,11 @@ echo ""
 echo "  DMARC (opendkim+opendmarc) — reject on the DMARC verdict, SPF policy off:"
 echo "    defender:  sudo mail-spf-off; sudo mail-dmarc-on"
 echo "    attacker:  spoof-mail ...   # 550 5.7.1 rejected by DMARC policy"
+echo ""
+echo "  Raw-TCP service (:9000, not HTTP) — exec/file, ported from cybersecurity-lab:"
+echo "    attacker:  printf 'exec id\\nquit\\n' | nc 192.168.100.1 9000   # RCE"
+echo "    defender:  sudo touch /etc/cyber-lab/tcp-hardened; sudo systemctl restart cyber-tcp"
+echo "    attacker:  printf 'exec id\\nquit\\n' | nc 192.168.100.1 9000   # refused"
 echo ""
 echo "  Or prove it all automatically:  qlab test cyber-lab"
 echo ""

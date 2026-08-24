@@ -1,11 +1,10 @@
 # cyber-lab — Guide
 
-> **Version 0.5.** Six chapters, each end to end and *proven on real VMs*
-> (`qlab test cyber-lab` → 36 checks green): the ban is the proof; close a
-> vulnerable PHP app and prove it closed; the blind filter (a zero that lies);
-> the Docker/FORWARD trap (a firewall that wasn't); the mail that lies (a
-> spoofed sender rejected by SPF); and DMARC says reject (the same spoof
-> rejected by a real opendkim+opendmarc verdict).
+> **Version 0.6.** Seven chapters, each end to end and *proven on real VMs*
+> (`qlab test cyber-lab` → 42 checks green): the ban is the proof; close a
+> vulnerable PHP app; the blind filter; the Docker/FORWARD trap; the mail that
+> lies (SPF); DMARC says reject; and the service that obeys (a vulnerable
+> raw-TCP protocol, ported from the old cybersecurity-lab).
 
 ## The one idea
 
@@ -213,9 +212,34 @@ The forged mail fails SPF (wrong IP) and carries no DKIM signature aligned to
 `boss.lab`, so DMARC fails, and `p=reject` is honoured at the milter. Same forged
 mail as chapter 5, rejected for the reason DMARC exists.
 
+## Chapter 7 — the service that obeys (raw TCP)
+
+Not every hole is HTTP. The defender runs a hand-rolled TCP service on `:9000`
+(ported from the old cybersecurity-lab) that runs whatever you send and reads
+whatever path you name:
+
+```
+# attacker
+printf 'exec id\nquit\n'          | nc 192.168.100.1 9000   # RCE: uid=0(root)
+printf 'file /etc/passwd\nquit\n' | nc 192.168.100.1 9000   # traversal
+```
+
+Then the same close-it-and-prove-it loop:
+
+```
+# defender
+sudo touch /etc/cyber-lab/tcp-hardened
+sudo systemctl restart cyber-tcp
+# attacker — the same commands are now refused
+printf 'exec id\nquit\n' | nc 192.168.100.1 9000            # refused
+```
+
+The point beyond the exploit: a filter or WAF tuned to HTTP would never see this
+traffic at all. The protocol is the attacker's, not the web's.
+
 ## Where this goes next
 
-The plugin covers its six backend chapters. What remains is the browser sibling
-**EDU-CYBER**, which reproduces the browser-friendly chapters with two hosts in
-one v86 kernel — using these proven invariants as its reference — and, if wanted,
-DKIM *signing* of legitimate outbound mail to complete the send-side story.
+The plugin covers seven backend chapters. What remains is the browser sibling
+**EDU-CYBER** (browser-friendly chapters with two hosts in one v86 kernel, using
+these proven invariants as reference) and, if wanted, DKIM *signing* of
+legitimate outbound mail to complete the send-side of the mail story.
